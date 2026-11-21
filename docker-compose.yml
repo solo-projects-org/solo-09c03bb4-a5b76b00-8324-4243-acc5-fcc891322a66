@@ -1,0 +1,16 @@
+services:
+  outage-events:
+    build: .
+    image: outage-events:latest
+    container_name: outage-events
+    ports:
+      - "8000:8000"
+    environment:
+      OUTAGE_DB_PATH: /data/outage.db
+      MERGE_GAP_MINUTES: "5"   # 同一馈线告警归并的最大间隔分钟数
+    volumes:
+      - outage-data:/data      # SQLite 数据持久化
+    restart: unless-stopped
+
+volumes:
+  outage-data:
