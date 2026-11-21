@@ -3,6 +3,10 @@
 所有输入记录（告警/抢修/复电回执）都带：馈线号、设备号、起止时间、来源流水号。
 发布（publication）固定三类输入的版本；事件（event）挂在某次发布下，
 旧发布及其事件永久保留，供迟到更正前结果的回溯查询。
+
+计划公告（plan_notice）按计划号登记，(plan_no, announced_at) 为幂等键；
+日档（daily_archive）是某成功发布号 + 馈线 + UTC 日期下已闭合事件的
+计划内/计划外分段核算结果，每次核算产生新日档号，旧日档永久保留可回查。
 """
 from __future__ import annotations
 
@@ -69,10 +73,46 @@ CREATE TABLE IF NOT EXISTS event_alarms (
     event_id INTEGER NOT NULL REFERENCES events(id),
     alarm_id INTEGER NOT NULL REFERENCES alarms(id)
 );
+CREATE TABLE IF NOT EXISTS plan_notices (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_no       TEXT NOT NULL,            -- 计划号（同一计划固定馈线）
+    feeder_no     TEXT NOT NULL,
+    announced_at  TEXT NOT NULL,            -- 实际公告时刻 UTC
+    planned_start TEXT,                     -- 计划停电开始（撤销可为空）
+    planned_end   TEXT,                     -- 计划停电结束（撤销可为空）
+    kind          TEXT NOT NULL,            -- notice / cancel
+    received_at   TEXT NOT NULL,            -- 入库时刻
+    UNIQUE (plan_no, announced_at)          -- 幂等键：同计划同公告时刻只记一次
+);
+CREATE TABLE IF NOT EXISTS daily_archives (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,  -- 日档号
+    created_at        TEXT NOT NULL,
+    publication_id    INTEGER NOT NULL REFERENCES publications(id),
+    feeder_no         TEXT NOT NULL,
+    date              TEXT NOT NULL,        -- UTC 日期 YYYY-MM-DD
+    notice_version    INTEGER NOT NULL,     -- 核算依据的公告版本（生效时已入库的最大 id）
+    status            TEXT NOT NULL,        -- serving / stale / superseded / failed
+    error             TEXT,                 -- 核算失败原因（status=failed 时）
+    event_count       INTEGER NOT NULL DEFAULT 0,
+    planned_minutes   REAL NOT NULL DEFAULT 0,
+    unplanned_minutes REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS daily_archive_segments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    archive_id INTEGER NOT NULL REFERENCES daily_archives(id),
+    event_id   INTEGER NOT NULL REFERENCES events(id),
+    seg_start  TEXT NOT NULL,
+    seg_end    TEXT NOT NULL,
+    kind       TEXT NOT NULL,             -- planned / unplanned
+    basis      TEXT NOT NULL DEFAULT '[]' -- JSON：计划内段的通知依据
+);
 CREATE INDEX IF NOT EXISTS idx_alarms_feeder       ON alarms(feeder_no, start_time);
 CREATE INDEX IF NOT EXISTS idx_restorations_feeder ON restorations(feeder_no, start_time);
 CREATE INDEX IF NOT EXISTS idx_repairs_feeder      ON repairs(feeder_no, start_time);
 CREATE INDEX IF NOT EXISTS idx_events_pub          ON events(publication_id);
+CREATE INDEX IF NOT EXISTS idx_plan_notices_feeder ON plan_notices(feeder_no, id);
+CREATE INDEX IF NOT EXISTS idx_daily_archives_key  ON daily_archives(publication_id, feeder_no, date, status);
+CREATE INDEX IF NOT EXISTS idx_segments_archive    ON daily_archive_segments(archive_id);
 """
 
 
